@@ -40,8 +40,15 @@ SWIFT has conventional variable naming conventions and development approaches. P
 After the PR is submitted, SWIFT will perform two types of tests:
 - Code Lint Test: A static code compliance check test. please make sure that you have performed code lint locally in advance.
 ```shell
-pip install pre-commit # In the swift folder
+pip install pre-commit ruff # In the swift folder
 pre-commit run --all-files # Fix the errors reported by pre-commit until all checks are successful
+```
+
+SWIFT uses [ruff](https://docs.astral.sh/ruff/) for static code linting (configured in `pyproject.toml` under `[tool.ruff]`), [isort](https://pycqa.github.io/isort/) for import sorting, and [yapf](https://github.com/google/yapf) for code formatting. To run ruff standalone:
+
+```shell
+ruff check --fix .    # Check and auto-fix
+ruff check .          # Check only, no modifications
 ```
 - CI Tests: Smoke tests and unit tests, please refer to the next section.
 
