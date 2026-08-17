@@ -1,0 +1,32 @@
+[tool.ruff]
+line-length = 120
+exclude = [
+    "docs/src",
+    "*.pyi",
+    ".git",
+    "peft.py",
+]
+
+[tool.ruff.lint]
+# flake8: B=bugbear, C4=comprehensions, E=pycodestyle errors, F=pyflakes, W=pycodestyle warnings
+# isort 和 double-quote-string-fixer 仍由 pre-commit 独立 hook 处理，不纳入 ruff
+select = ["B", "C4", "E", "F", "W"]
+ignore = [
+    "F401", "F403", "F405", "F821",
+    "B905", "B007", "B023", "B904",
+    "B006", "B028", "B030", "B026", "B018", "B027", "B024", "B011", "B008", "B004",
+    "C419", "C416", "C408", "C401", "C403", "C400", "C414",
+    "E501",  # ruff 按显示宽度计算行宽（中文算2），与 flake8 按字符数不一致
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件中的长字符串（含中文）不强制 E501
+"tests/**/*.py" = ["E501"]
+# examples 目录宽松检查
+"examples/**/*.py" = ["E501", "E402"]
+# notebook 不检查 import 位置和行长度
+"*.ipynb" = ["E402", "E501"]
+# agent_template 含长 prompt 字符串
+"swift/agent_template/**/*.py" = ["E501"]
+# scripts 含长报告生成字符串
+"scripts/**/*.py" = ["E501"]
