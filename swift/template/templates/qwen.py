@@ -210,20 +210,20 @@ class QwenVLTemplate(Template):
                     inputs: StdTemplateInputs) -> List[Context]:
         assert media_type == 'image'
         if self.mode == 'lmdeploy':
-            return [f'Picture {index + 1}: ', [-100], '\n']
+            return [f"Picture {index + 1}: ", [-100], '\n']
         else:
             image = inputs.images[index]
             if self.mode == 'vllm':
-                return [f'Picture {index + 1}: <img></img>\n']
+                return [f"Picture {index + 1}: <img></img>\n"]
             else:
                 assert isinstance(image, str)
-                return [f'Picture {index + 1}: <img>{image}</img>\n']
+                return [f"Picture {index + 1}: <img>{image}</img>\n"]
 
     def replace_ref(self, ref: str, index: int, inputs: StdTemplateInputs) -> List[Context]:
-        return [f'<ref>{ref}</ref>']
+        return [f"<ref>{ref}</ref>"]
 
     def replace_bbox(self, bbox: List[int], index: int, inputs: StdTemplateInputs) -> List[Context]:
-        return [f'<box>{self._get_bbox_str(bbox)}</box>']
+        return [f"<box>{self._get_bbox_str(bbox)}</box>"]
 
 
 register_template(QwenTemplateMeta(MLLMTemplateType.qwen_vl, template_cls=QwenVLTemplate, agent_template=None))
@@ -237,7 +237,7 @@ class QwenAudioTemplate(Template):
         audios = inputs.audios
         audio = audios[index]
         assert isinstance(audio, str)
-        return [f'Audio {index + 1}:<audio>{audio}</audio>\n']
+        return [f"Audio {index + 1}:<audio>{audio}</audio>\n"]
 
     def _tokenize(self, context, **kwargs):
         audio_info = self.processor.process_audio(context)
@@ -245,7 +245,7 @@ class QwenAudioTemplate(Template):
 
     def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         encoded = super()._encode(inputs)
-        text = ''.join([f'<audio>{audio}</audio>' for audio in inputs.audios])
+        text = ''.join([f"<audio>{audio}</audio>" for audio in inputs.audios])
         audio_info = self.processor.process_audio(text)
         if audio_info:
             tokenizer_kwargs = {'audio_info': audio_info}
@@ -275,7 +275,7 @@ class Qwen2AudioTemplate(Template):
         if not self.use_chat_template:
             return ['<|audio_bos|><|AUDIO|><|audio_eos|>\n']
         else:
-            return [f'Audio {index + 1}: <|audio_bos|><|AUDIO|><|audio_eos|>\n']
+            return [f"Audio {index + 1}: <|audio_bos|><|AUDIO|><|audio_eos|>\n"]
 
     def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         encoded = super()._encode(inputs)
@@ -368,13 +368,13 @@ class Qwen2VLTemplate(Template):
 
     def replace_ref(self, ref: str, index: int, inputs: StdTemplateInputs) -> List[Context]:
         if self.bbox_format == 'legacy':
-            return [f'<|object_ref_start|>{ref}<|object_ref_end|>']
+            return [f"<|object_ref_start|>{ref}<|object_ref_end|>"]
         else:
             return [ref]
 
     def replace_bbox(self, bbox: List[int], index: int, inputs: StdTemplateInputs) -> List[Context]:
         if self.bbox_format == 'legacy':
-            return [f'<|box_start|>{self._get_bbox_str(bbox)}<|box_end|>']
+            return [f"<|box_start|>{self._get_bbox_str(bbox)}<|box_end|>"]
         else:
             return [str(bbox)]
 
@@ -604,7 +604,7 @@ class Qwen3_5Template(Qwen3VLTemplate):
     def _post_encode(self, model, inputs: Dict[str, Any]) -> Dict[str, Any]:
         if self.padding_free and self.sequence_parallel_size <= 1 and not self.transformers_5_9:
             raise RuntimeError('Qwen3.5 packing/padding_free with sequence_parallel_size=1 requires '
-                               f'transformers>=5.9.0 (current: {self.transformers_version}). ')
+                               f"transformers>=5.9.0 (current: {self.transformers_version}). ")
         return Qwen2VLTemplate._post_encode(self, model, inputs)
 
     def _swift_prepare_inputs(self, inputs: StdTemplateInputs):
@@ -630,7 +630,7 @@ class Qwen3_5Template(Qwen3VLTemplate):
                     before, _, after = stripped.partition('</think>')
                     reasoning = before.rstrip('\n').rsplit('<think>', 1)[-1].lstrip('\n').strip()
                     rest = after.lstrip('\n')
-                    message['content'] = f'<think>\n{reasoning}\n</think>\n\n{rest}'
+                    message['content'] = f"<think>\n{reasoning}\n</think>\n\n{rest}"
                 else:
                     message['content'] = stripped
         super()._swift_prepare_inputs(inputs)
@@ -662,8 +662,8 @@ class Qwen3_8Template(Qwen3_5Template):
         if reasoning_effort is None:
             reasoning_effort = self.default_reasoning_effort
         if reasoning_effort not in self.reasoning_effort_instructions:
-            raise ValueError(f'Unexpected reasoning effort {reasoning_effort}. Supported types are '
-                             f'{list(self.reasoning_effort_instructions.keys())}.')
+            raise ValueError(f"Unexpected reasoning effort {reasoning_effort}. Supported types are "
+                             f"{list(self.reasoning_effort_instructions.keys())}.")
         return self.reasoning_effort_instructions[reasoning_effort]
 
     def _get_system(self, inputs: StdTemplateInputs) -> Optional[str]:
@@ -672,7 +672,7 @@ class Qwen3_8Template(Qwen3_5Template):
         if not reasoning_instructions:
             return system
         if system:
-            return f'{reasoning_instructions}\n\n{system}'
+            return f"{reasoning_instructions}\n\n{system}"
         return reasoning_instructions
 
     def _jinja_encode(self, inputs: StdTemplateInputs):
@@ -859,7 +859,7 @@ class Qwen2_5OmniTemplate(Qwen2_5VLTemplate):
             elif isinstance(audio, np.ndarray):
                 trimmed.append(trim_audio_to_hop_length(audio, hop))
             else:
-                raise TypeError(f'unexpected audio type {type(audio)!r}; expected ndarray or (ndarray, meta)')
+                raise TypeError(f"unexpected audio type {type(audio)!r}; expected ndarray or (ndarray, meta)")
         return trimmed
 
     def _encode_truncated(self, inputs: StdTemplateInputs):
@@ -1026,14 +1026,14 @@ class Qwen2_5OmniTemplate(Qwen2_5VLTemplate):
 
         for media_type in ['image', 'video']:
             if self.version == 'omni_v3':
-                token_id = [getattr(config, f'{media_type}_token_id')]
+                token_id = [getattr(config, f"{media_type}_token_id")]
             else:
-                token = f'<|{media_type.upper()}|>'
+                token = f"<|{media_type.upper()}|>"
                 token_id = self._tokenize(token)
             idx_list = findall(input_ids, token_id)
             if idx_list:
                 merge_size = processor.image_processor.merge_size
-                media_grid_thw = media_inputs.get(f'{media_type}_grid_thw')
+                media_grid_thw = media_inputs.get(f"{media_type}_grid_thw")
                 if media_type == 'video' and self.use_audio_in_video:
                     audio_lengths = audio_lengths_origin[video_audios_mask]
                     video_second_per_grid = media_inputs['video_second_per_grid']
@@ -1316,7 +1316,7 @@ class Qwen3TTSTemplate(Template):
         text = inputs.messages[-1]['content'] if inputs.messages else ''
 
         # Build TTS text with assistant markers
-        tts_text = f'<|im_start|>assistant\n{text}'
+        tts_text = f"<|im_start|>assistant\n{text}"
         text_ids = self._tokenize(tts_text)
 
         # Get audio codes (pre-extracted or online)
