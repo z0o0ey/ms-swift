@@ -239,6 +239,7 @@ class MLLMTemplateType:
     deepseek_janus_pro = 'deepseek_janus_pro'
     deepseek_ocr = 'deepseek_ocr'
     deepseek_ocr2 = 'deepseek_ocr2'
+    deepseek_v4_flash_vision = 'deepseek_v4_flash_vision'
     unlimited_ocr = 'unlimited_ocr'
 
     mplug_owl2 = 'mplug_owl2'

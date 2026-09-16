@@ -189,6 +189,20 @@ register_model(
         architectures=['DeepseekV4ForCausalLM'],
     ))
 
+register_model(
+    ModelMeta(
+        MLLMModelType.deepseek_v4_vl,
+        [
+            ModelGroup([
+                Model('deepseek-ai/DeepSeek-V4-Flash-Vision', 'deepseek-ai/DeepSeek-V4-Flash-Vision'),
+            ], TemplateType.deepseek_v4_flash_vision),
+        ],
+        template=TemplateType.deepseek_v4_flash_vision,
+        model_arch=ModelArch.deepseek_v4_vl,
+        architectures=['DeepseekV4ForCausalLM'],
+        tags=['vision'],
+    ))
+
 
 class DeepseekVLLoader(ModelLoader):
 

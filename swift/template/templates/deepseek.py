@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass, field
+from pathlib import Path
 from PIL import Image, ImageOps
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from typing import Any, Dict, List, Optional
@@ -816,3 +817,206 @@ register_template(
         MLLMTemplateType.deepseek_janus_pro,
         prompt=['<|User|>: {{QUERY}}\n\n<|Assistant|>:'],
         template_cls=DeepseekJanus))
+
+
+class DeepseekV4VisionTemplate(DeepseekV4FlashTemplate):
+
+    IMAGE_START = 0
+    IMAGE_PAD = 1
+    IMAGE = 2
+    IMAGE_NEWLINE = 3
+    IMAGE_END = 4
+    COMPRESS_PAD_TO = 4
+
+    image_placeholder = ['<image>']
+
+    def init_env_args(self):
+        super().init_env_args()
+        c = self.config
+        self._patch_size = getattr(c, 'vision_patch_size', 14)
+        self._downsample_ratio = getattr(c, 'vision_downsample_ratio', 2)
+        self._min_pixels = getattr(c, 'vision_min_pixels', 4 * 28 * 28)
+        self._max_wh_ratio = getattr(c, 'vision_max_wh_ratio', 10.0)
+        self._max_n_token = getattr(c, 'vision_max_n_token', 384)
+
+    @property
+    def vocab_size(self) -> int:
+        return self.tokenizer.vocab_size
+
+    @staticmethod
+    def _grid_tokens(best_height, best_width, patch_size, downsample_ratio):
+        """Number of LLM tokens the aligner grid occupies (N-layout)."""
+        n_llm_h = math.ceil((best_height // patch_size) / downsample_ratio)
+        n_llm_w = math.ceil((best_width // patch_size) / downsample_ratio)
+        num_tokens = n_llm_h * (n_llm_w + 1) + 2
+        if n_llm_h % 2 == 1:
+            num_tokens += n_llm_w + 1
+        num_tokens += (n_llm_h + 1) // 2 * (n_llm_w + 1) % 2 * 2
+        return n_llm_h, n_llm_w, num_tokens
+
+    def _solve_resize_ratio(self, height, width, patch_size, downsample_ratio, max_n_token):
+        r = height / width
+        max_w_float = math.sqrt((max_n_token - 2) / r + 0.25) - 0.5
+        max_h_float = max_w_float * r
+        if max_w_float < 1.0:
+            max_w = 1
+            max_h = (max_n_token - 2) // (max_w + 1)
+            if max_h % 2 == 1:
+                max_h -= 1
+            best_width = max_w * patch_size * downsample_ratio
+            best_height = max_h * patch_size * downsample_ratio
+        elif max_h_float < 2.0:
+            max_h = 2
+            max_w = ((max_n_token - 2) // max_h) - 1
+            assert max_w > 1
+            best_width = max_w * patch_size * downsample_ratio
+            best_height = max_h * patch_size * downsample_ratio
+        else:
+            max_w = math.floor(max_w_float)
+            max_h = math.floor(max_h_float)
+            if max_h % 2 == 1:
+                max_h -= 1
+            beta = min(max_w * patch_size * downsample_ratio / width, max_h * patch_size * downsample_ratio / height)
+            best_width = math.floor(width * beta / patch_size) * patch_size
+            best_height = math.floor(height * beta / patch_size) * patch_size
+        n_llm_h, n_llm_w, _ = self._grid_tokens(best_height, best_width, patch_size, downsample_ratio)
+        return n_llm_h, n_llm_w, best_height, best_width, 0
+
+    def _safe_resize(self, height, width, best_height, best_width, patch_size, downsample_ratio, max_n_token):
+        max_n_token -= self.COMPRESS_PAD_TO - 1
+        n_llm_h, n_llm_w, num_tokens = self._grid_tokens(best_height, best_width, patch_size, downsample_ratio)
+        budget = max_n_token
+        while num_tokens > max_n_token:
+            n_llm_h, n_llm_w, best_height, best_width, num_tokens = self._solve_resize_ratio(
+                height, width, patch_size, downsample_ratio, budget)
+            budget -= 1
+        return n_llm_h, n_llm_w, best_height, best_width
+
+    @classmethod
+    def _build_image_block(cls, n_llm_h: int, n_llm_w: int, start_pos: int):
+        compress_pad = cls.COMPRESS_PAD_TO - 1 - start_pos % cls.COMPRESS_PAD_TO
+        pad_h = n_llm_h % 2
+        rows = n_llm_h + pad_h
+        row_len = n_llm_w + 1
+        pad_last = rows // 2 * row_len % 2 * 2
+        # Build types in row-major order, then reorder via N-layout.
+        types = torch.tensor(
+            ([cls.IMAGE] * n_llm_w + [cls.IMAGE_NEWLINE]) * n_llm_h + [cls.IMAGE_PAD] * (row_len * pad_h),
+            dtype=torch.int64)
+        # N-layout: interleave pairs of rows.
+        order = torch.arange(rows * row_len).view(rows // 2, 2, row_len).transpose(1, 2).reshape(-1)
+        image_idx = torch.full((rows * row_len, ), -1, dtype=torch.int64)
+        image_idx.view(rows, row_len)[:n_llm_h, :n_llm_w] = torch.arange(n_llm_h * n_llm_w).view(n_llm_h, n_llm_w)
+        perm = image_idx[order]
+        perm = perm[perm >= 0]
+        types = torch.cat([
+            torch.full((compress_pad, ), cls.IMAGE_PAD, dtype=torch.int64),
+            torch.tensor([cls.IMAGE_START], dtype=torch.int64),
+            types[order],
+            torch.full((pad_last, ), cls.IMAGE_PAD, dtype=torch.int64),
+            torch.tensor([cls.IMAGE_END], dtype=torch.int64),
+        ])
+        return types, perm
+
+    def _load_image(self, image, load_images: bool = True) -> Image.Image:
+        if isinstance(image, dict) and 'bytes' in image:
+            image = image['bytes'] or image['path']
+        if isinstance(image, (str, Path)):
+            from swift.template.vision_utils import load_image
+            image = load_image(image)
+        return image.convert('RGB')
+
+    def _extract_patches(self, image: Image.Image) -> tuple:
+        p = self._patch_size
+        r = self._downsample_ratio
+        image = image.convert('RGB')
+        width, height = image.size
+
+        # Constrain aspect ratio.
+        if self._max_wh_ratio is not None and width > height * self._max_wh_ratio:
+            width = height * self._max_wh_ratio
+        # Enforce minimum pixels.
+        if 0 < width * height < self._min_pixels:
+            ratio = (self._min_pixels / (width * height))**0.5
+            width = int(width * ratio)
+            height = int(height * ratio)
+        best_width = math.ceil(width / p) * p
+        best_height = math.ceil(height / p) * p
+        # Safe resize to fit within max_n_token.
+        n_llm_h, n_llm_w, best_height, best_width = self._safe_resize(height, width, best_height, best_width, p, r,
+                                                                      self._max_n_token)
+        n_vit_h, n_vit_w = best_height // p, best_width // p
+
+        # Pad image to target size.
+        if self._max_wh_ratio is not None and image.width >= self._max_wh_ratio * image.height:
+            image = image.resize((best_width, best_height))
+        else:
+            image = ImageOps.pad(image, (best_width, best_height), color=(127, 127, 127))
+
+        # Normalize to [-1, 1] and extract patches.
+        x = torch.from_numpy(np.asarray(image, dtype=np.float32)).permute(2, 0, 1) / 255
+        x = ((x - 0.5) / 0.5).to(torch.bfloat16)
+        patches = x.reshape(3, n_vit_h, p, n_vit_w, p).permute(1, 3, 0, 2, 4).reshape(n_vit_h * n_vit_w, 3, p, p)
+        return patches, n_vit_h, n_vit_w, n_llm_h, n_llm_w
+
+    def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
+        encoded = super()._encode(inputs)
+        input_ids = encoded['input_ids']
+        labels = encoded['labels']
+        loss_scale = encoded.get('loss_scale', None)
+        images = inputs.images or []
+
+        if not images:
+            return encoded
+
+        image_token = self._tokenize('<image>')
+        idx_list = findall(input_ids, image_token)
+        if not idx_list:
+            return encoded
+
+        all_image_tokens = []
+        image_inputs_per_sample = []
+        current_pos = len(input_ids)
+        for i, image in enumerate(images):
+            patches, n_vit_h, n_vit_w, n_llm_h, n_llm_w = self._extract_patches(image)
+            types, perm = self._build_image_block(n_llm_h, n_llm_w, current_pos)
+            # Token IDs = vocab_size + type offsets.
+            tokens = [self.vocab_size + int(t) for t in types]
+            all_image_tokens.append(tokens)
+            image_inputs_per_sample.append({
+                'patches': patches,
+                'n_vit_h': n_vit_h,
+                'n_vit_w': n_vit_w,
+                'n_llm_h': n_llm_h,
+                'n_llm_w': n_llm_w,
+                'types': types,
+                'perm': perm,
+                'start': current_pos,
+            })
+            current_pos += len(tokens) - 1
+
+        input_ids, labels, loss_scale = self._extend_tokens(input_ids, labels, loss_scale, idx_list,
+                                                            lambda i: all_image_tokens[i])
+        encoded['input_ids'] = input_ids
+        encoded['labels'] = labels
+        encoded['loss_scale'] = loss_scale
+        encoded['image_inputs'] = image_inputs_per_sample
+        return encoded
+
+    def _data_collator_mm_data(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        res = super()._data_collator_mm_data(batch)
+        image_inputs_list = [b['image_inputs'] for b in batch if b.get('image_inputs') is not None]
+        if image_inputs_list:
+            res['image_inputs'] = image_inputs_list
+        return res
+
+
+register_template(
+    DeepseekV2_5TemplateMeta(
+        MLLMTemplateType.deepseek_v4_flash_vision,
+        agent_template='deepseek_v4',
+        is_thinking=True,
+        template_cls=DeepseekV4VisionTemplate,
+        thinking_prefix='<think>',
+        non_thinking_prefix='</think>',
+        history_thinking_prefix='</think>'))
